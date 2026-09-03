@@ -108,7 +108,7 @@ export const WallSchema = z.strictObject({
 });
 
 /**
- * Which side of the wall a door leaf swings out to, and which end it is hinged at.
+ * Which side of the wall a hinged leaf swings out to, and which end it is hinged at.
  *
  * Both are expressed relative to the wall's own a -> b direction, never in world terms: `side` is
  * left or right of that direction vector, `hinge` is the low-offset end (`a`) or the high-offset
@@ -141,11 +141,58 @@ const openingBase = {
   meta: MetaSchema,
 };
 
-export const PlanDoorSchema = z.strictObject({
+const doorBase = {
   ...openingBase,
   kind: z.literal('door'),
+};
+
+/**
+ * A conventional hinged door. The only kind of doorway that has a swing, and therefore the only one
+ * that costs the room a 90 degree sector of floor.
+ */
+export const HingedDoorSchema = z.strictObject({
+  ...doorBase,
+  leaf: z.literal('hinged'),
   swing: DoorSwingSchema,
 });
+
+/**
+ * A slider: a wardrobe-style or balcony-style leaf that runs along the wall.
+ *
+ * It has no `swing` field to fill in, because it takes no floor. That is the whole reason sliders
+ * get specified in real flats — they go where a swing will not fit — so a schema that let one carry
+ * swing data would hand the solver a phantom sector to subtract from a room that actually has none.
+ */
+export const SlidingDoorSchema = z.strictObject({
+  ...doorBase,
+  leaf: z.literal('sliding'),
+});
+
+/**
+ * A cased opening: a doorway with no leaf at all, the kind a living room uses to open onto a
+ * passage. Structurally a hole with a lining round it.
+ */
+export const CasedOpeningSchema = z.strictObject({
+  ...doorBase,
+  leaf: z.literal('none'),
+});
+
+/**
+ * A doorway, of whichever kind.
+ *
+ * A discriminated union on `leaf`, not one object with an optional `swing`, because the placement
+ * solver READS the swing to subtract a sector of floor from the room. An optional field would make
+ * three failures possible at once: a hinged door with no swing (a sector silently not subtracted),
+ * a slider or a cased opening carrying leftover swing data from when it was hinged (a sector
+ * subtracted that does not exist, and furniture refused from floor that is actually free), and no
+ * way for the compiler to tell anyone which case they are in. Here, `leaf === 'hinged'` is the only
+ * shape that has a `swing` at all, and reading one without narrowing does not compile.
+ */
+export const PlanDoorSchema = z.discriminatedUnion('leaf', [
+  HingedDoorSchema,
+  SlidingDoorSchema,
+  CasedOpeningSchema,
+]);
 
 export const PlanWindowSchema = z.strictObject({
   ...openingBase,
@@ -153,11 +200,10 @@ export const PlanWindowSchema = z.strictObject({
 });
 
 /**
- * A hole in a wall.
+ * A hole in a wall: a doorway of some kind, or a window.
  *
- * A discriminated union rather than one object with an optional `swing`, so that a door without
- * swing information cannot be constructed (the solver needs it to subtract the swing sector from
- * free space) and a window carrying one cannot either.
+ * Discriminated on `kind` at the top and on `leaf` within a door, so a window can never carry a
+ * swing and neither can two of the three doorways.
  */
 export const OpeningSchema = z.discriminatedUnion('kind', [PlanDoorSchema, PlanWindowSchema]);
 
@@ -400,7 +446,11 @@ export type PlanNode = z.infer<typeof NodeSchema>;
 export type Wall = z.infer<typeof WallSchema>;
 export type DoorSwing = z.infer<typeof DoorSwingSchema>;
 /** `PlanDoor` / `PlanWindow` for the same reason as `PlanNode`: `Window` is a DOM global. */
+export type HingedDoor = z.infer<typeof HingedDoorSchema>;
+export type SlidingDoor = z.infer<typeof SlidingDoorSchema>;
+export type CasedOpening = z.infer<typeof CasedOpeningSchema>;
 export type PlanDoor = z.infer<typeof PlanDoorSchema>;
+export type DoorLeaf = PlanDoor['leaf'];
 export type PlanWindow = z.infer<typeof PlanWindowSchema>;
 export type Opening = z.infer<typeof OpeningSchema>;
 export type Room = z.infer<typeof RoomSchema>;

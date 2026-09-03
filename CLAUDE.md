@@ -193,6 +193,17 @@ boring.
 2. India-first or region-neutral
 3. Desktop-first or mobile from day one
 4. A real name
+5. **Plan space:** x increases east, y increases **downward** (south), matching SVG and screen
+   coordinates so the 2D editor needs no flip. The three.js boundary maps plan (x, y) to world
+   (x, z) and is the only place this changes.
+6. **Left and right of a wall** mean left and right for a person walking from node `a` to node `b`,
+   looking down at the plan: for direction (dx, dy), the left side is the half-plane that (dy, -dx)
+   points into. Walking east, north is on your left. Door swings and item anchors are both defined
+   against this. Implement it once, in `lib/geometry`, and import it everywhere.
+7. **Nodes are wall centrelines, not faces.** A wall occupies thicknessMm/2 either side. Derived
+   face coordinates therefore land on half-millimetres even though every stored value is an
+   integer — this is correct and expected. Never use a face coordinate as a map key or an equality
+   test. Node IDs are the identity.
 
 ## How to work here
 

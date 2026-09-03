@@ -23,7 +23,10 @@ import type { Item, Level, Opening, PlanDoc, PlanNode, Room, Wall } from './sche
  * ---------------------------------------------------------------------------------------------- */
 
 export type Severity =
-  /** Cannot be rendered in 3D or reasoned about: a broken reference, impossible geometry. */
+  /**
+   * Cannot be rendered in 3D or reasoned about — a broken reference, impossible geometry — or is
+   * certainly wrong however it renders, with no document in which it would be correct.
+   */
   | 'error'
   /** Renderable, but probably not what the user meant: two corners 3mm apart, a room with no door. */
   | 'warning';
@@ -69,6 +72,7 @@ export type IssueCode =
   | 'OPENING_PAST_WALL_END'
   | 'OPENING_TALLER_THAN_WALL'
   | 'OPENING_OVERLAP'
+  | 'OPENING_NO_LEAF_ON_EXTERNAL_WALL'
   // Rooms
   | 'ROOM_LOOP_BROKEN'
   | 'ROOM_LOOP_REPEATED_WALL'
@@ -222,9 +226,24 @@ function validateLevel(level: Level): Issue[] {
    */
   const unmeasurable = new Set<string>();
 
+  /**
+   * Which rooms each wall bounds. A wall named by two room loops is internal; a wall named by
+   * exactly one has outdoors on its other side. The document has no `external` flag, and deriving
+   * it from the room graph is better than adding one — a flag would be a second source of truth
+   * that goes stale the moment a room is redrawn.
+   */
+  const roomsByWall = new Map<string, Room[]>();
+  for (const r of level.rooms) {
+    for (const wallId of new Set(r.wallLoop)) {
+      const list = roomsByWall.get(wallId) ?? [];
+      list.push(r);
+      roomsByWall.set(wallId, list);
+    }
+  }
+
   const references = checkReferences(level, { nodeById, wallById, roomById, itemById }, unmeasurable);
   const walls = checkWalls(level, nodeById, unmeasurable);
-  const openings = checkOpenings(level, nodeById, wallById, unmeasurable);
+  const openings = checkOpenings(level, nodeById, wallById, roomsByWall, unmeasurable);
   const rooms = checkRooms(level, wallById);
   const items = checkItems(level, nodeById, wallById, unmeasurable);
 
@@ -459,7 +478,7 @@ function checkUnreferencedNodes(level: Level): Issue[] {
  * not a rendering glitch; it is geometry the extruder cannot produce at all.
  * ---------------------------------------------------------------------------------------------- */
 
-function checkOpenings(level: Level, nodeById: Map<string, PlanNode>, wallById: Map<string, Wall>, unmeasurable: Set<string>): Issue[] {
+function checkOpenings(level: Level, nodeById: Map<string, PlanNode>, wallById: Map<string, Wall>, roomsByWall: Map<string, Room[]>, unmeasurable: Set<string>): Issue[] {
   const issues: Issue[] = [];
   const byWall = new Map<string, Opening[]>();
 
@@ -476,6 +495,21 @@ function checkOpenings(level: Level, nodeById: Map<string, PlanNode>, wallById: 
     if (topMm > wall.heightMm) {
       issues.push(
         issue('error', 'OPENING_TALLER_THAN_WALL', level.id, [{ kind: 'opening', id: opening.id }, { kind: 'wall', id: wall.id }], `The ${opening.kind} ${opening.id} reaches ${topMm}mm above the floor (${opening.sillMm}mm sill plus ${opening.heightMm}mm of ${opening.kind}), but wall ${wall.id} is only ${wall.heightMm}mm tall.`),
+      );
+    }
+
+    // A doorway with no leaf, in a wall with outdoors on its other side, is a hole in the building.
+    // There is no flat in which that is deliberate, which is why this is an error rather than a
+    // warning: every warning above has a legitimate case, and this one has none.
+    //
+    // Only flagged when the wall bounds EXACTLY one room. A wall in no room loop at all is a wall
+    // whose surroundings are not described yet — which is every wall in a half-drawn plan — and
+    // guessing "external" there would make the editor shout at a user who has simply not finished.
+    const bounding = roomsByWall.get(wall.id) ?? [];
+    if (opening.kind === 'door' && opening.leaf === 'none' && bounding.length === 1) {
+      const room = bounding[0];
+      issues.push(
+        issue('error', 'OPENING_NO_LEAF_ON_EXTERNAL_WALL', level.id, [{ kind: 'opening', id: opening.id }, { kind: 'wall', id: wall.id }, { kind: 'room', id: room.id }], `The ${opening.widthMm}mm opening ${opening.id} has no door in it, but wall ${wall.id} is the outside wall of "${room.name}" — it bounds no other room, so the far side is outdoors. Give it a door, or make it a window.`),
       );
     }
 
@@ -543,6 +577,8 @@ function checkOpenings(level: Level, nodeById: Map<string, PlanNode>, wallById: 
 function checkRooms(level: Level, wallById: Map<string, Wall>): Issue[] {
   const issues: Issue[] = [];
 
+  // Any leaf counts as a way in, including a cased opening — walking through a doorway does not
+  // require it to have a door hanging in it.
   const doorWalls = new Set(level.openings.filter((o) => o.kind === 'door').map((o) => o.wall));
   const roomsByName = new Map<string, string[]>();
 

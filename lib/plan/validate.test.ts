@@ -23,8 +23,9 @@ type RawLevel = RawDoc['levels'][number];
 type RawNode = RawLevel['nodes'][number];
 type RawWall = RawLevel['walls'][number];
 type RawOpening = RawLevel['openings'][number];
-// `Partial<RawOpening>` would collapse the door/window discriminator, so narrow first.
-type RawDoor = Extract<RawOpening, { kind: 'door' }>;
+// `Partial<RawOpening>` would collapse the kind/leaf discriminators, so narrow first.
+type RawHingedDoor = Extract<RawOpening, { leaf: 'hinged' }>;
+type RawCasedOpening = Extract<RawOpening, { leaf: 'none' }>;
 type RawWindow = Extract<RawOpening, { kind: 'window' }>;
 type RawRoom = RawLevel['rooms'][number];
 type RawItem = RawLevel['items'][number];
@@ -47,11 +48,17 @@ function wall(id: string, a: string, b: string, over: Partial<RawWall> = {}): Ra
   return { id, a, b, thicknessMm: 115, ...over, meta };
 }
 
-function door(id: string, wallId: string, offsetMm: number, over: Partial<Omit<RawDoor, 'kind'>> = {}): RawDoor {
+function door(
+  id: string,
+  wallId: string,
+  offsetMm: number,
+  over: Partial<Omit<RawHingedDoor, 'kind' | 'leaf'>> = {},
+): RawHingedDoor {
   return {
     id,
     wall: wallId,
     kind: 'door',
+    leaf: 'hinged',
     offsetMm,
     widthMm: 900,
     heightMm: 2100,
@@ -60,6 +67,16 @@ function door(id: string, wallId: string, offsetMm: number, over: Partial<Omit<R
     ...over,
     meta,
   };
+}
+
+/** A doorway with no leaf in it. */
+function casedOpening(
+  id: string,
+  wallId: string,
+  offsetMm: number,
+  over: Partial<Omit<RawCasedOpening, 'kind' | 'leaf'>> = {},
+): RawCasedOpening {
+  return { id, wall: wallId, kind: 'door', leaf: 'none', offsetMm, widthMm: 1200, heightMm: 2100, sillMm: 0, ...over, meta };
 }
 
 function windowOpening(id: string, wallId: string, offsetMm: number, over: Partial<Omit<RawWindow, 'kind'>> = {}): RawWindow {
@@ -347,6 +364,83 @@ describe('openings', () => {
 
   test('two openings touching end to end do not overlap', () => {
     expect(codes(validate(wallLevel([door('d1', 'w1', 0), door('d2', 'w1', 900)])))).not.toContain('OPENING_OVERLAP');
+  });
+});
+
+/* --- Leafless openings ------------------------------------------------------------------------------ */
+
+describe('cased openings', () => {
+  /** One triangular room: every one of its walls has outdoors on the other side. */
+  const oneRoom = (openings: RawOpening[]): PlanDoc =>
+    makeDoc([
+      level({
+        nodes: [node('n1', 0, 0), node('n2', 4000, 0), node('n3', 0, 3000)],
+        walls: [wall('w1', 'n1', 'n2'), wall('w2', 'n2', 'n3'), wall('w3', 'n3', 'n1')],
+        openings,
+        rooms: [room('r1', 'Studio', ['w1', 'w2', 'w3'])],
+      }),
+    ]);
+
+  /** Two rooms side by side sharing the middle wall w7. */
+  const twoRooms = (openings: RawOpening[]): PlanDoc =>
+    makeDoc([
+      level({
+        nodes: [
+          node('n1', 0, 0),
+          node('n2', 4000, 0),
+          node('n3', 8000, 0),
+          node('n4', 8000, 3000),
+          node('n5', 4000, 3000),
+          node('n6', 0, 3000),
+        ],
+        walls: [
+          wall('w1', 'n1', 'n2'),
+          wall('w2', 'n2', 'n3'),
+          wall('w3', 'n3', 'n4'),
+          wall('w4', 'n4', 'n5'),
+          wall('w5', 'n5', 'n6'),
+          wall('w6', 'n6', 'n1'),
+          wall('w7', 'n2', 'n5'),
+        ],
+        openings,
+        rooms: [room('r1', 'Living', ['w1', 'w7', 'w5', 'w6']), room('r2', 'Dining', ['w2', 'w3', 'w4', 'w7'])],
+      }),
+    ]);
+
+  test('OPENING_NO_LEAF_ON_EXTERNAL_WALL when the wall bounds only one room', () => {
+    const found = validate(oneRoom([casedOpening('d1', 'w1', 1000)])).find(
+      (i) => i.code === 'OPENING_NO_LEAF_ON_EXTERNAL_WALL',
+    );
+    expect(found?.severity).toBe('error');
+    expect(found?.message).toContain('"Studio"');
+    expect(found?.refs.map((r) => r.id)).toEqual(['d1', 'w1', 'r1']);
+  });
+
+  test('a hinged door or a slider on the same wall is fine', () => {
+    expect(codes(validate(oneRoom([door('d1', 'w1', 1000)])))).not.toContain('OPENING_NO_LEAF_ON_EXTERNAL_WALL');
+    expect(
+      codes(validate(oneRoom([{ ...casedOpening('d1', 'w1', 1000), leaf: 'sliding' }]))),
+    ).not.toContain('OPENING_NO_LEAF_ON_EXTERNAL_WALL');
+  });
+
+  test('a cased opening between two rooms is exactly what they are for', () => {
+    expect(validate(twoRooms([casedOpening('d1', 'w7', 1000)]))).toEqual([]);
+  });
+
+  test('a wall in no room loop is not assumed to be external', () => {
+    // Half-drawn plans have walls and no rooms yet; shouting at that user helps nobody.
+    const doc = makeDoc([
+      level({
+        nodes: [node('n1', 0, 0), node('n2', 4000, 0)],
+        walls: [wall('w1', 'n1', 'n2')],
+        openings: [casedOpening('d1', 'w1', 1000)],
+      }),
+    ]);
+    expect(codes(validate(doc))).not.toContain('OPENING_NO_LEAF_ON_EXTERNAL_WALL');
+  });
+
+  test('a cased opening still counts as a way into a room', () => {
+    expect(codes(validate(twoRooms([casedOpening('d1', 'w7', 1000)])))).not.toContain('ROOM_NO_DOOR');
   });
 });
 
