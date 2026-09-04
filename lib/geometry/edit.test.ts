@@ -11,7 +11,12 @@
 import { describe, expect, test } from 'vitest';
 
 import type { HingedDoor, Item, Level, Meta, PlanWindow, Room, Wall } from '../plan/schema';
-import { chooseMovingEnd, planLengthChange, splitWall } from './edit';
+import {
+  chooseMovingEnd,
+  MAX_SENSIBLE_WALL_LENGTH_MM,
+  planLengthChange,
+  splitWall,
+} from './edit';
 
 const meta: Meta = { source: 'user', confidence: 1 };
 
@@ -489,6 +494,22 @@ describe('planLengthChange', () => {
     expect(outcome.change.to).toEqual({ x: 2357, y: 2357 });
     expect(outcome.change.achievedLengthMm).toBe(3333);
     expect(Number.isInteger(outcome.change.to.x)).toBe(true);
+  });
+
+  test('refuses a length longer than any wall in any flat, and says what the limit is', () => {
+    expect(planLengthChange(level(), 'w1', 140_000_000_000, 'b')).toEqual({
+      ok: false,
+      reason: 'too-long',
+      maxMm: MAX_SENSIBLE_WALL_LENGTH_MM,
+    });
+  });
+
+  test('the boundary is inclusive: the cap itself is allowed, one millimetre more is not', () => {
+    const atCap = planLengthChange(level(), 'w1', MAX_SENSIBLE_WALL_LENGTH_MM, 'b');
+    expect(atCap.ok).toBe(true);
+
+    const over = planLengthChange(level(), 'w1', MAX_SENSIBLE_WALL_LENGTH_MM + 1, 'b');
+    expect(over.ok).toBe(false);
   });
 
   test('refuses a length that is not a positive number', () => {

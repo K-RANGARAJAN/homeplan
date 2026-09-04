@@ -40,31 +40,42 @@ export function Issues(): React.JSX.Element {
         aria-expanded={open}
         className="flex h-11 w-full items-center gap-2 px-3 text-left text-sm"
       >
-        <Dot tone={errors > 0 ? 'error' : warnings > 0 ? 'warning' : 'clean'} />
-        <span className="font-medium">
+        <span className="shrink-0">
+          <Dot tone={errors > 0 ? 'error' : warnings > 0 ? 'warning' : 'clean'} />
+        </span>
+        <span className="min-w-0 flex-1 truncate font-medium">
           {issues.length === 0
             ? 'No problems'
             : `${errors > 0 ? `${errors} ${errors === 1 ? 'error' : 'errors'}` : ''}${errors > 0 && warnings > 0 ? ', ' : ''}${warnings > 0 ? `${warnings} ${warnings === 1 ? 'warning' : 'warnings'}` : ''}`}
         </span>
-        {issues.length > 0 && <span className="ml-auto opacity-60">{open ? 'Hide' : 'Show'}</span>}
+        {issues.length > 0 && <span className="shrink-0 opacity-60">{open ? 'Hide' : 'Show'}</span>}
       </button>
 
       {open && issues.length > 0 && (
-        <ul className="max-h-56 overflow-y-auto border-t border-black/10 dark:border-white/10">
+        <ul className="max-h-56 overflow-y-auto overscroll-contain border-t border-black/10 dark:border-white/10">
           {issues.map((issue, index) => (
             <li key={`${issue.code}-${index}`}>
               <button
                 type="button"
                 onClick={() => focus(issue.refs)}
-                className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-black/5 dark:hover:bg-white/10"
+                className="flex min-h-11 w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-black/5 dark:hover:bg-white/10"
               >
-                <span className="pt-[3px]">
+                <span className="shrink-0 pt-[3px]">
                   <Dot tone={issue.severity} />
                 </span>
-                <span>
-                  <span className="font-mono opacity-50">{issue.code}</span>
-                  <br />
-                  {issue.message}
+                {/*
+                  `min-w-0` is what stops this row overflowing, and it is not optional. A flex item
+                  defaults to `min-width: auto`, which means it refuses to shrink below its longest
+                  unbreakable word — and these rows carry codes like OPENING_NO_LEAF_ON_EXTERNAL_WALL.
+                  The row then grows wider than the list; the list has `overflow-y: auto`, which per
+                  the spec computes `overflow-x` to `auto` as well; and once that has been swiped
+                  sideways on a phone, every row is cut off on its left edge, code first. Letting the
+                  column shrink, and letting the words break, means there is nothing to scroll.
+                */}
+                <span className="min-w-0 flex-1">
+                  <span className="block break-all font-mono opacity-50">{issue.code}</span>
+                  {/* Prose: break a word only when it would otherwise overflow, never mid-word by choice. */}
+                  <span className="block break-words">{issue.message}</span>
                 </span>
               </button>
             </li>

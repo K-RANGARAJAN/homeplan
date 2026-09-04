@@ -256,6 +256,24 @@ function planRoomInsertions(level: Level, wall: Wall): RoomInsertion[] {
 export type WallEnd = 'a' | 'b';
 
 /**
+ * The longest wall the length field will accept, in millimetres.
+ *
+ * A judgement about real distances, in the same spirit as the validator's `MIN_SENSIBLE_WALL_LENGTH_MM`
+ * and `NODE_MERGE_TOLERANCE_MM`, not an epsilon: 50 metres is longer than any single unbroken wall in
+ * any flat, and comfortably longer than most whole buildings. Past it, the number is a slipped finger
+ * on the keypad — an extra zero, or a value pasted from somewhere else — and accepting it silently
+ * flings a corner most of the way to the next city, taking every wall attached to it along and leaving
+ * the user with a plan they cannot see because the view has zoomed out to fit a hundred kilometres.
+ *
+ * Enforced HERE rather than in the field, so the preview and the commit cannot disagree about it.
+ *
+ * Note what this is not: a document invariant. `validate` has no `WALL_TOO_LONG` check, so a plan
+ * loaded from disk or produced by extraction can still contain one. This is the bound on what a
+ * person may type, which is the case that actually arises.
+ */
+export const MAX_SENSIBLE_WALL_LENGTH_MM = 50_000;
+
+/**
  * Which end of a wall moves when its length is typed in.
  *
  * THE DECISION, and it is the one that decides whether the tool feels like an instrument or feels
@@ -340,7 +358,12 @@ export type LengthFailure =
   | { ok: false; reason: 'no-such-wall' }
   | { ok: false; reason: 'unmeasurable' }
   /** A wall must have a positive length; zero has no direction and nothing downstream is defined. */
-  | { ok: false; reason: 'not-positive' };
+  | { ok: false; reason: 'not-positive' }
+  /**
+   * Longer than `MAX_SENSIBLE_WALL_LENGTH_MM`. The limit travels with the refusal so the caller can
+   * name it in a message without holding its own copy of the number.
+   */
+  | { ok: false; reason: 'too-long'; maxMm: number };
 
 export type LengthOutcome = { ok: true; change: LengthChange } | LengthFailure;
 
@@ -359,6 +382,9 @@ export function planLengthChange(
   const wall = level.walls.find((w) => w.id === wallId);
   if (wall === undefined) return { ok: false, reason: 'no-such-wall' };
   if (!Number.isFinite(lengthMm) || lengthMm <= 0) return { ok: false, reason: 'not-positive' };
+  if (lengthMm > MAX_SENSIBLE_WALL_LENGTH_MM) {
+    return { ok: false, reason: 'too-long', maxMm: MAX_SENSIBLE_WALL_LENGTH_MM };
+  }
 
   const nodeById = indexNodes(level.nodes);
   const ends = wallEnds(nodeById, wall);

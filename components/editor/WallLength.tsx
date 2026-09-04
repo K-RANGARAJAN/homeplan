@@ -20,13 +20,19 @@ import { useEffect, useState } from 'react';
 
 import {
   chooseMovingEnd,
+  MAX_SENSIBLE_WALL_LENGTH_MM,
   planLengthChange,
   type LengthChange,
+  type LengthFailure,
+  type LengthOutcome,
   type WallEnd,
 } from '@/lib/geometry/edit';
 import { indexNodes, wallLengthMm } from '@/lib/geometry/pick';
 import type { Level, Wall } from '@/lib/plan/schema';
 import { currentLevel, usePlanStore } from '@/lib/plan/store';
+
+/** Only one length field exists at a time — the wrapper renders at most one wall — so a fixed id is safe. */
+const ERROR_ID = 'wall-length-error';
 
 export function WallLength(): React.JSX.Element | null {
   const doc = usePlanStore((state) => state.doc);
@@ -60,11 +66,17 @@ function Field({
   const [moving, setMoving] = useState<WallEnd>(() => chooseMovingEnd(level, wall));
 
   const requested = Number.parseInt(typed, 10);
-  const outcome =
-    !Number.isFinite(requested) || requested <= 0 || requested === currentMm
+  // An empty or half-typed field is not a mistake to shout about — someone clearing the box on the
+  // way to a new number should not be told off for it. A number that IS there and is wrong,
+  // including zero and negatives, goes to `planLengthChange` and comes back refused, because being
+  // refused with a reason is the whole point. The one number that is neither is the length the wall
+  // already has: nothing to do, nothing to say.
+  const outcome: LengthOutcome | null =
+    !Number.isFinite(requested) || requested === currentMm
       ? null
       : planLengthChange(level, wall.id, requested, moving);
   const change = outcome !== null && outcome.ok ? outcome.change : null;
+  const refusal = outcome !== null && !outcome.ok ? refuse(outcome, requested) : null;
 
   // The plan draws the ghost, and this component does not own the plan — so the preview goes through
   // the store. Synchronising an external system is what an effect is actually for.
@@ -91,13 +103,28 @@ function Field({
             type="number"
             inputMode="numeric"
             min={1}
+            max={MAX_SENSIBLE_WALL_LENGTH_MM}
             step={1}
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') commit();
             }}
-            className="h-11 w-32 rounded-lg border border-black/15 px-2 text-right font-mono dark:border-white/20"
+            aria-invalid={refusal !== null}
+            aria-describedby={refusal === null ? undefined : ERROR_ID}
+            /*
+              Wide enough to READ a wrong number, not just a right one. Under the 50m cap a real
+              length is at most five digits and would fit in half this, but the entry that most needs
+              looking at is the one with four extra zeros in it — and a field that hides the mistake
+              the user is trying to find is the one place width actually matters. Left-aligned rather
+              than right, so an over-long value shows its beginning, which is the part that tells you
+              how badly it is wrong.
+            */
+            className={`h-11 w-44 rounded-lg border px-2 font-mono ${
+              refusal === null
+                ? 'border-black/15 dark:border-white/20'
+                : 'border-red-600 bg-red-50 text-red-900'
+            }`}
           />
           <span className="opacity-60">mm</span>
         </label>
@@ -130,11 +157,21 @@ function Field({
         </span>
       </div>
 
-      <p className="text-xs text-black/60 dark:text-white/60">
-        {change === null
-          ? `This wall is ${currentMm}mm. Type a length; the corner shown will slide along the wall to make it exact.`
-          : describe(change.node, change.followers.length, change.achievedLengthMm, requested)}
-      </p>
+      {refusal === null ? (
+        <p className="text-xs text-black/60 dark:text-white/60">
+          {change === null
+            ? `This wall is ${currentMm}mm. Type a length; the corner shown will slide along the wall to make it exact.`
+            : describe(change.node, change.followers.length, change.achievedLengthMm, requested)}
+        </p>
+      ) : (
+        <p
+          id={ERROR_ID}
+          role="alert"
+          className="rounded-lg border border-red-600/50 bg-red-50 px-3 py-2 text-xs text-red-900"
+        >
+          {refusal}
+        </p>
+      )}
 
       {/*
         Said BEFORE the change, not after. `validate` would report both of these the moment they
@@ -157,6 +194,56 @@ function Field({
       )}
     </div>
   );
+}
+
+/**
+ * Why the length was refused, in plain language with the real numbers.
+ *
+ * A refusal, not a warning, so it is red and it disables Apply — unlike the amber block below it,
+ * which describes something the user is allowed to go ahead and do. The distinction has to be
+ * visible: an editor where "careful" and "no" look the same teaches you to ignore both.
+ */
+function refuse(outcome: LengthFailure, requestedMm: number): string | null {
+  if (outcome.reason === 'not-positive') {
+    return 'A wall has to be longer than nothing. Type a length in millimetres.';
+  }
+  if (outcome.reason === 'too-long') {
+    const cap = `The longest wall this will accept is ${group(outcome.maxMm)}mm (${scaled(outcome.maxMm)}) — longer than any wall in any flat, so a bigger number is a slipped finger rather than a room.`;
+    // The typed value is only translated when its digits have stopped meaning anything. Just over
+    // the cap the millimetre figure reads perfectly well, and "50,001mm is 50 m" would look like a
+    // contradiction of the very limit being quoted.
+    return requestedMm >= outcome.maxMm * 10
+      ? `${group(requestedMm)}mm is ${scaled(requestedMm)}. ${cap}`
+      : `${group(requestedMm)}mm is too long. ${cap}`;
+  }
+  // `no-such-wall` and `unmeasurable` cannot happen here: this component only renders for a wall it
+  // has already measured. Saying nothing beats inventing a message for an unreachable state.
+  return null;
+}
+
+/**
+ * Thousands separators, fixed at three digits.
+ *
+ * Deliberately not `toLocaleString()`: that follows the browser's locale, which groups Indian numbers
+ * as 1,40,00,00,000, and would also differ between the server render and the client one. Construction
+ * drawings group in threes everywhere, including India, and this is a dimension.
+ */
+function group(value: number): string {
+  const [whole, fraction] = Math.abs(value).toString().split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`;
+}
+
+/**
+ * The same number at a scale a person can picture. Separators alone do not make 140,000,000,000 real.
+ *
+ * One decimal place, kept rather than rounded away, because 1,500,000mm reported as "2 km" would be a
+ * measuring instrument lying about a measurement — even about one it is in the middle of refusing.
+ */
+function scaled(mm: number): string {
+  const metres = mm / 1000;
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+  return metres >= 1000 ? `${group(round1(metres / 1000))} km` : `${group(round1(metres))} m`;
 }
 
 /**

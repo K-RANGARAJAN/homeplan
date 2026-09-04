@@ -562,7 +562,9 @@ export const usePlanStore = create<PlanState>()(
             state.notice =
               outcome.reason === 'not-positive'
                 ? 'A wall has to be longer than nothing. Type a length in millimetres.'
-                : `Wall ${wallId} cannot be measured, so its length cannot be set.`;
+                : outcome.reason === 'too-long'
+                  ? `That is longer than ${outcome.maxMm}mm, which is already longer than any wall in any flat. Check the number.`
+                  : `Wall ${wallId} cannot be measured, so its length cannot be set.`;
           });
           return;
         }

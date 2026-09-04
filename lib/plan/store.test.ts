@@ -366,6 +366,16 @@ describe('typed exact lengths', () => {
     expect(store().issues.map((i) => i.code)).toContain('NODES_NEARLY_COINCIDENT');
   });
 
+  test('an absurd length is refused rather than applied, and the corner does not move', () => {
+    drawChain(at(0, 0), at(4000, 0));
+    const [, b] = nodeIds();
+
+    store().setWallLength(wallIds()[0], 140_000_000_000, 'b');
+    expect(nodeAt(b)).toEqual({ x: 4000, y: 0 });
+    expect(store().notice).toMatch(/longer than 50000mm/i);
+    expect(undoDepth()).toBe(1); // The wall itself; nothing added by the refusal.
+  });
+
   test('a length that is not a positive number is refused with an explanation', () => {
     drawChain(at(0, 0), at(4000, 0));
     store().setWallLength(wallIds()[0], 0, 'b');
