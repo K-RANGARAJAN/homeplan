@@ -15,8 +15,8 @@ import { useEffect, useMemo, useRef, type ComponentRef } from 'react';
 import * as THREE from 'three';
 
 import { toMetres } from '@/lib/geometry/plan-space';
-import { sampleFlat } from '@/lib/plan/sample';
 import type { Level } from '@/lib/plan/schema';
+import { currentLevel, usePlanStore } from '@/lib/plan/store';
 
 import { Walls } from './Walls';
 
@@ -71,13 +71,15 @@ function planBounds(level: Level): Bounds {
 }
 
 export function Viewport(): React.JSX.Element {
-  // One document, built once. Nothing loads from disk this task.
-  const doc = useMemo(() => sampleFlat(), []);
-  const level = doc.levels[0];
+  // The SAME document the 2D editor is editing, read from the same store. The 3D scene is not a
+  // separate thing that gets synced — it is a rendering of the one document, so an edit in the plan
+  // is already an edit here, and the two cannot drift apart.
+  const doc = usePlanStore((state) => state.doc);
+  const level = currentLevel(doc);
   const bounds = useMemo(() => planBounds(level), [level]);
 
   return (
-    <div className="fixed inset-0">
+    <div className="absolute inset-0">
       <Canvas dpr={[1, 2]} camera={{ fov: 45, near: 0.1, far: 400 }}>
         <color attach="background" args={[BACKGROUND_COLOUR]} />
 
@@ -142,12 +144,16 @@ function Floor({ bounds }: { bounds: Bounds }): React.JSX.Element {
 function Framing({ bounds }: { bounds: Bounds }): React.JSX.Element {
   const controls = useRef<ComponentRef<typeof CameraControls>>(null);
   const camera = useThree((state) => state.camera);
+  const framed = useRef(false);
 
-  // Framed once, when the document arrives — deliberately not on resize, because re-aiming the
-  // camera under someone who is in the middle of orbiting is worse than a slightly awkward crop.
+  // Framed ONCE, on the first document that arrives. `bounds` now changes on every edit in the 2D
+  // plan, and re-aiming the camera each time — under someone who is orbiting, or watching a wall
+  // they just drew — would make the 3D view unusable as a check on the 2D one. Not on resize either,
+  // for the same reason.
   useEffect(() => {
     const instance = controls.current;
-    if (instance === null || !(camera instanceof THREE.PerspectiveCamera)) return;
+    if (instance === null || framed.current || !(camera instanceof THREE.PerspectiveCamera)) return;
+    framed.current = true;
 
     const target = new THREE.Vector3(
       (bounds.minX + bounds.maxX) / 2,

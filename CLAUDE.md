@@ -190,8 +190,11 @@ boring.
    via ONNX Runtime Web, LoRA-tuned 1-3B via WebLLM, grammar-constrained decoding, browser-only
    storage, static hosting) but relies on CC-BY-NC and research-only datasets, which would block
    commercialisation later. **Not decided.**
-2. India-first or region-neutral
-3. Desktop-first or mobile from day one
+2. Region: India-first. NBC door widths, 750-800 counter heights, mm dimension
+   strings on plans. `region: 'IN' | 'US'` stays in the schema, but IN is the
+   default and the only one tested.
+3. Desktop and touch from day one. No hover-only affordances, no right-click,
+   44px minimum touch targets, Pointer Events not mouse events.
 4. A real name
 5. **Plan space:** x increases east, y increases **downward** (south), matching SVG and screen
    coordinates so the 2D editor needs no flip. The three.js boundary maps plan (x, y) to world
