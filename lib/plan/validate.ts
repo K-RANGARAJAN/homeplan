@@ -105,8 +105,15 @@ export interface Issue {
 /** Under this, a wall is more likely an extraction artifact than a real piece of building. */
 const MIN_SENSIBLE_WALL_LENGTH_MM = 100;
 
-/** Two corners closer than this are one corner that failed to merge. It shows as a hairline gap in 3D. */
-const NODE_MERGE_TOLERANCE_MM = 5;
+/**
+ * Two corners closer than this are one corner that failed to merge. It shows as a hairline gap in 3D.
+ *
+ * Exported, unlike its neighbour, because the 2D editor warns about this case BEFORE committing an
+ * edit that would cause it. Two copies of the number would be two definitions of the same rule
+ * waiting to disagree, and the disagreement would be silent: the preview would promise one thing and
+ * the issue panel report another.
+ */
+export const NODE_MERGE_TOLERANCE_MM = 5;
 
 /* ------------------------------------------------------------------------------------------------
  * Local geometry helpers

@@ -125,20 +125,38 @@ describe('splitWall', () => {
     if (!outcome.ok) return;
 
     expect(outcome.split.cutMm).toBe(2500);
-    expect(outcome.split.node).toEqual({ id: 'nX', x: 2500, y: 0, meta: { source: 'derived', confidence: 1 } });
-    expect(outcome.split.shortenedWall).toBe('w1');
+    expect(outcome.split.node).toMatchObject({ id: 'nX', x: 2500, y: 0 });
+    expect(outcome.split.shortened).toEqual({
+      wall: 'w1',
+      b: 'nX',
+      meta: { source: 'user', confidence: 1 },
+    });
     expect(outcome.split.addedWall.a).toBe('nX');
     expect(outcome.split.addedWall.b).toBe('n2');
   });
 
-  test('the far half inherits thickness, height and provenance rather than claiming to be new', () => {
+  test('the far half inherits thickness and height — the same piece of building, cut', () => {
     const level = boxWithFittings();
     const outcome = splitWall(level, 'w1', { x: 2500, y: 0 }, ids);
     if (!outcome.ok) throw new Error('expected a split');
 
     expect(outcome.split.addedWall.thicknessMm).toBe(115);
     expect(outcome.split.addedWall.heightMm).toBe(2900);
-    expect(outcome.split.addedWall.meta).toEqual({ source: 'auto', confidence: 0.4 });
+  });
+
+  test('everything the tap creates or changes becomes the user"s, so extraction cannot undo the split', () => {
+    // The fixture's walls are all `auto` at 0.4 confidence, as an extraction run would leave them.
+    const level = boxWithFittings();
+    const outcome = splitWall(level, 'w1', { x: 2500, y: 0 }, ids);
+    if (!outcome.ok) throw new Error('expected a split');
+
+    const authored = { source: 'user', confidence: 1 };
+    expect(outcome.split.node.meta).toEqual(authored);
+    expect(outcome.split.addedWall.meta).toEqual(authored);
+    // Including the ORIGINAL wall. Left `auto`, a later extraction pass could replace it with the
+    // uncut wall it first found, undoing the split and stranding the corner between two walls that
+    // no longer meet it.
+    expect(outcome.split.shortened.meta).toEqual(authored);
   });
 
   test('openings past the cut move to the far half with their offsets recomputed', () => {
@@ -317,6 +335,129 @@ describe('planLengthChange', () => {
     if (!outcome.ok) throw new Error('expected a change');
     expect(outcome.change.node).toBe('a');
     expect(outcome.change.to).toEqual({ x: 500, y: 0 });
+  });
+
+  test('nothing collapses in the ordinary case', () => {
+    const outcome = planLengthChange(level(), 'w1', 3500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.collapsing).toEqual([]);
+  });
+
+  test('a follower whose far corner already sits at the destination is reported as collapsing', () => {
+    //   a ──── w1 ──── b        d sits at (2500, 0), which is exactly where b is headed if w1 is
+    //                 / w2      set to 2500mm. w2 would then run from d to d: no length, no
+    //   d ──────────── ⌐        direction, and every question about it undefined.
+    const collapsible = makeLevel(
+      [
+        ['a', 0, 0],
+        ['b', 4000, 0],
+        ['c', 4000, 3000],
+        ['d', 2500, 0],
+      ],
+      [wall('w1', 'a', 'b'), wall('w2', 'b', 'd'), wall('w3', 'b', 'c')],
+    );
+
+    const outcome = planLengthChange(collapsible, 'w1', 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.to).toEqual({ x: 2500, y: 0 });
+    expect([...outcome.change.followers].sort()).toEqual(['w2', 'w3']);
+    // Only w2 collapses. w3 merely gets longer.
+    expect(outcome.change.collapsing).toEqual(['w2']);
+  });
+
+  test('the same move from the other end collapses nothing, which is what the flip control is for', () => {
+    const collapsible = makeLevel(
+      [
+        ['a', 0, 0],
+        ['b', 4000, 0],
+        ['d', 2500, 0],
+      ],
+      [wall('w1', 'a', 'b'), wall('w2', 'b', 'd')],
+    );
+    const outcome = planLengthChange(collapsible, 'w1', 2500, 'a');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.collapsing).toEqual([]);
+  });
+
+  test('a near miss is not a collapse — one millimetre of wall is still a wall', () => {
+    const collapsible = makeLevel(
+      [
+        ['a', 0, 0],
+        ['b', 4000, 0],
+        ['d', 2501, 0],
+      ],
+      [wall('w1', 'a', 'b'), wall('w2', 'b', 'd')],
+    );
+    const outcome = planLengthChange(collapsible, 'w1', 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.collapsing).toEqual([]);
+  });
+
+  test('nothing is nearly coincident in the ordinary case', () => {
+    const outcome = planLengthChange(level(), 'w1', 3500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([]);
+  });
+
+  test('a corner landing a few millimetres from another is reported, with the real distance', () => {
+    const crowded = makeLevel(
+      [
+        ['a', 0, 0],
+        ['b', 4000, 0],
+        ['d', 2497, 0],
+      ],
+      [wall('w1', 'a', 'b')],
+    );
+    const outcome = planLengthChange(crowded, 'w1', 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([{ node: 'd', distanceMm: 3 }]);
+  });
+
+  test('exactly on top of another corner is not reported — coincident corners do meet', () => {
+    const crowded = makeLevel(
+      [
+        ['a', 0, 0],
+        ['b', 4000, 0],
+        ['d', 2500, 0],
+      ],
+      [wall('w1', 'a', 'b')],
+    );
+    const outcome = planLengthChange(crowded, 'w1', 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([]);
+  });
+
+  test('the tolerance boundary matches the validator exactly: under 5mm, not 5mm', () => {
+    const build = (dx: number): Level =>
+      makeLevel(
+        [
+          ['a', 0, 0],
+          ['b', 4000, 0],
+          ['d', 2500 + dx, 0],
+        ],
+        [wall('w1', 'a', 'b')],
+      );
+
+    const inside = planLengthChange(build(4), 'w1', 2500, 'b');
+    if (!inside.ok) throw new Error('expected a change');
+    expect(inside.change.nearlyCoincident.map((n) => n.node)).toEqual(['d']);
+
+    const outside = planLengthChange(build(5), 'w1', 2500, 'b');
+    if (!outside.ok) throw new Error('expected a change');
+    expect(outside.change.nearlyCoincident).toEqual([]);
+  });
+
+  test('the moving corner is not its own near neighbour on a small change', () => {
+    // 4000 -> 3998 moves b two millimetres. Without excluding it, b would report itself.
+    const outcome = planLengthChange(level(), 'w1', 3998, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([]);
+  });
+
+  test('the fixed end IS checked — a wall short enough to fold onto its own corner is the point', () => {
+    const outcome = planLengthChange(level(), 'w1', 3, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([{ node: 'a', distanceMm: 3 }]);
   });
 
   test('names the walls that will follow the moved corner', () => {

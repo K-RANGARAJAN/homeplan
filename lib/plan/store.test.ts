@@ -12,6 +12,7 @@
 
 import { beforeEach, describe, expect, test } from 'vitest';
 
+import { planLengthChange } from '../geometry/edit';
 import { sampleFlat } from './sample';
 import { SCHEMA_VERSION, type Level, type PlanDoc } from './schema';
 import { currentLevel, usePlanStore, type DrawAnchor } from './store';
@@ -169,6 +170,26 @@ describe('drawing onto an existing wall', () => {
     expect(validate(store().doc)).toEqual([]);
   });
 
+  test('the split marks the corner and both halves as the user"s, so extraction cannot undo it', () => {
+    const doc = sampleFlat();
+    // As an extraction run would leave it: found automatically, and not confidently.
+    const w1 = doc.levels[0].walls.find((w) => w.id === 'w1');
+    if (w1 === undefined) throw new Error('no w1');
+    w1.meta = { source: 'auto', confidence: 0.4 };
+    store().reset(doc);
+
+    // Clear of window v1, which runs 1250..2750 along w1 — a cut through it would be refused.
+    store().drawTo({ on: 'wall', wall: 'w1', at: { x: 1000, y: 0 } });
+    store().drawTo({ on: 'empty', at: { x: 1000, y: 1500 } });
+    store().endChain();
+
+    const junction = level().nodes.find((n) => n.x === 1000 && n.y === 0);
+    expect(junction?.meta).toEqual({ source: 'user', confidence: 1 });
+    for (const wall of level().walls.filter((w) => w.a === junction?.id || w.b === junction?.id)) {
+      expect(wall.meta).toEqual({ source: 'user', confidence: 1 });
+    }
+  });
+
   test('the whole thing — split plus new wall — is one undo step', () => {
     drawChain(at(0, 0), at(4000, 0));
     const before = undoDepth();
@@ -308,6 +329,41 @@ describe('typed exact lengths', () => {
     store().setWallLength(wallIds()[0], 5000, 'b');
     expect(nodeAt(corner)).toEqual({ x: 5000, y: 0 });
     expect(nodeAt(level().walls[1].a)).toEqual({ x: 5000, y: 0 });
+  });
+
+  test('a follower that would be left with no length is reported before the change, not after', () => {
+    // Two walls off one corner, with the far corner of the second sitting exactly where the first
+    // wall's end is headed.
+    drawChain(at(0, 0), at(4000, 0));
+    const corner = level().walls[0].b;
+    store().drawTo({ on: 'node', node: corner });
+    store().drawTo(at(2500, 0));
+    store().endChain();
+
+    const outcome = planLengthChange(level(), wallIds()[0], 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.collapsing).toEqual([wallIds()[1]]);
+
+    // And it is a warning, not a refusal: the change still applies, and `validate` then says so.
+    store().setWallLength(wallIds()[0], 2500, 'b');
+    expect(store().issues.map((i) => i.code)).toContain('WALL_ZERO_LENGTH');
+  });
+
+  test('a corner landing a few millimetres from another is reported before the change, not after', () => {
+    // Two walls running east from the same corner, the shorter ending 2497mm along.
+    drawChain(at(0, 0), at(4000, 0));
+    const [origin] = nodeIds();
+    store().drawTo({ on: 'node', node: origin });
+    store().drawTo(at(2497, 0));
+    store().endChain();
+
+    const outcome = planLengthChange(level(), wallIds()[0], 2500, 'b');
+    if (!outcome.ok) throw new Error('expected a change');
+    expect(outcome.change.nearlyCoincident).toEqual([{ node: nodeIds()[2], distanceMm: 3 }]);
+
+    // And the preview agrees with the validator, because both read the same tolerance.
+    store().setWallLength(wallIds()[0], 2500, 'b');
+    expect(store().issues.map((i) => i.code)).toContain('NODES_NEARLY_COINCIDENT');
   });
 
   test('a length that is not a positive number is refused with an explanation', () => {

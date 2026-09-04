@@ -18,7 +18,12 @@
 
 import { useEffect, useState } from 'react';
 
-import { chooseMovingEnd, planLengthChange, type WallEnd } from '@/lib/geometry/edit';
+import {
+  chooseMovingEnd,
+  planLengthChange,
+  type LengthChange,
+  type WallEnd,
+} from '@/lib/geometry/edit';
 import { indexNodes, wallLengthMm } from '@/lib/geometry/pick';
 import type { Level, Wall } from '@/lib/plan/schema';
 import { currentLevel, usePlanStore } from '@/lib/plan/store';
@@ -67,6 +72,8 @@ function Field({
     setLengthPreview(change);
     return () => setLengthPreview(null);
   }, [change, setLengthPreview]);
+
+  const warnings = change === null ? [] : warn(change);
 
   const commit = (): void => {
     if (change === null) return;
@@ -128,8 +135,58 @@ function Field({
           ? `This wall is ${currentMm}mm. Type a length; the corner shown will slide along the wall to make it exact.`
           : describe(change.node, change.followers.length, change.achievedLengthMm, requested)}
       </p>
+
+      {/*
+        Said BEFORE the change, not after. `validate` would report both of these the moment they
+        happened, but by then the user has watched a wall vanish, or nothing visible at all in the
+        case of a 3mm gap, and has to go and read a panel somewhere else to find out why. A warning
+        that only arrives after the fact is not what previewing is for.
+
+        ONE BLOCK, not one per kind: two stacked amber panels under a length field read as an editor
+        that is unhappy about everything, which is the fastest way to teach someone to stop reading.
+      */}
+      {warnings.length > 0 && (
+        <div className="rounded-lg border border-amber-500/50 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+          <p className="mt-1 opacity-80">
+            You can still apply this. Moving the other end instead usually avoids it.
+          </p>
+        </div>
+      )}
     </div>
   );
+}
+
+/**
+ * What `validate` would say afterwards, said beforehand instead.
+ *
+ * Deliberately NOT every issue the change could cause. `WALL_TOO_SHORT` — under 100mm — is not
+ * warned about, because someone typing 90mm into a length field usually means 90mm, and a warning
+ * that fires on a deliberate act is exactly how people are trained to dismiss warnings unread. That
+ * would cost us the two below, which are cases the user genuinely did not intend.
+ */
+function warn(change: LengthChange): string[] {
+  const messages: string[] = [];
+
+  if (change.collapsing.length === 1) {
+    messages.push(
+      `Wall ${change.collapsing[0]} would be left with no length at all — its far corner is already at that point.`,
+    );
+  } else if (change.collapsing.length > 1) {
+    messages.push(
+      `Walls ${change.collapsing.join(', ')} would be left with no length at all — their far corners are already at that point.`,
+    );
+  }
+
+  for (const near of change.nearlyCoincident) {
+    messages.push(
+      `Corner ${near.node} would be only ${near.distanceMm}mm away. That reads as one corner drawn twice: too close to see in the plan, and a hairline gap where the walls fail to meet in 3D.`,
+    );
+  }
+
+  return messages;
 }
 
 /** Said in plain language, with the real numbers — including the length actually achievable. */

@@ -24,8 +24,39 @@
  * Pure. No React, no store, no three.js.
  */
 
-import type { Level, Opening, PlanNode, Wall } from '../plan/schema';
+/**
+ * The provenance every element touched by a user's action takes on.
+ *
+ * ONE RULE, AND IT IS THE ONLY ONE THAT MAKES THE MERGE GUARANTEE WORK: what a user's action creates
+ * or changes becomes theirs. `meta.source` exists so that re-running extraction can refuse to
+ * overwrite `user` elements, and that promise is worth exactly as much as the set of elements it
+ * covers.
+ *
+ * WHY NOT `derived` FOR A SPLIT CORNER, which is the tempting reading — the coordinates were
+ * computed, by projecting a tap onto a wall centreline, so surely code decided them? No: code
+ * decided the coordinates, but the USER decided that there is a corner there at all. Every corner in
+ * this editor is snapped and rounded on its way in, and none of that makes it less the user's. The
+ * test is not "did arithmetic touch this value" but "would regenerating it destroy a decision
+ * somebody made", and here it plainly would: a later extraction pass that felt free to move or
+ * delete this corner would take the partition wall hanging off it along too.
+ *
+ * `derived` is for an element the app can recompute from scratch and that embodies no decision of
+ * anyone's. Nothing in the editor produces one.
+ *
+ * The same rule applies to BOTH HALVES of a split wall, including the original, and that is the part
+ * worth spelling out. Leaving them `auto` would let extraction replace them with the uncut wall it
+ * originally found — undoing the split, and stranding the `user` corner between two walls that no
+ * longer meet it. A `user` corner between `auto` walls is not a consistent document; it is the
+ * clobbering this field exists to prevent, arriving one indirection later. The cost is that a wall
+ * the user split stops being shaded as doubtful even though they never checked its thickness, and
+ * that is the right trade: they have looked at it and acted on it, so it is no longer a place they
+ * need to be sent back to.
+ */
+const AUTHORED: Meta = { source: 'user', confidence: 1 };
+
+import type { Level, Meta, Opening, PlanNode, Wall } from '../plan/schema';
 import { distance, normalise, subtract, type Point } from './plan-space';
+import { NODE_MERGE_TOLERANCE_MM } from '../plan/validate';
 import { indexNodes, projectOntoSegment, wallEnds } from './pick';
 
 /* ------------------------------------------------------------------------------------------------
@@ -58,8 +89,11 @@ export interface WallSplit {
    * room loops on the near half stay exactly as they are. Giving both halves fresh ids would orphan
    * every reference to the wall at once, and the editor would be turning one tap into a document
    * full of errors.
+   *
+   * `meta` is carried here rather than left to the caller because provenance is part of the edit,
+   * not part of applying it — see `AUTHORED`.
    */
-  shortenedWall: string;
+  shortened: { wall: string; b: string; meta: Meta };
   /** The far half: a brand new wall from the new node to the original `b`. */
   addedWall: Wall;
   /** Openings past the cut. Those before it keep their wall and their offset and are not listed. */
@@ -150,28 +184,25 @@ export function splitWall(level: Level, wallId: string, at: Point, ids: SplitIds
     id: ids.node,
     x: position.x,
     y: position.y,
-    // `derived`, not `user`: nobody chose this corner's coordinates, they fell out of where an
-    // existing wall happened to run. Re-running extraction is free to move it; a corner the user
-    // dragged by hand is not.
-    meta: { source: 'derived', confidence: 1 },
+    meta: { ...AUTHORED },
   };
 
   const addedWall: Wall = {
     id: ids.wall,
     a: node.id,
     b: wall.b,
+    // The far half is the same piece of building as the near half: same thickness, same height. Its
+    // PROVENANCE is not inherited, though — see `AUTHORED`.
     thicknessMm: wall.thicknessMm,
     heightMm: wall.heightMm,
-    // The far half is the same piece of building as the near half, so it inherits its provenance
-    // rather than claiming to be something the user drew.
-    meta: { ...wall.meta },
+    meta: { ...AUTHORED },
   };
 
   return {
     ok: true,
     split: {
       node,
-      shortenedWall: wall.id,
+      shortened: { wall: wall.id, b: node.id, meta: { ...AUTHORED } },
       addedWall,
       movedOpenings,
       movedItems,
@@ -270,6 +301,39 @@ export interface LengthChange {
   achievedLengthMm: number;
   /** The other walls sharing the moving corner. They follow it, and they will change shape. */
   followers: readonly string[];
+  /**
+   * Followers that this move would leave with NO LENGTH AT ALL, because their far corner is already
+   * sitting exactly where the moving one is headed.
+   *
+   * Reported rather than discovered afterwards. `validate` would of course catch it — it is
+   * `WALL_ZERO_LENGTH`, an error — but catching it afterwards defeats the entire point of previewing
+   * the change: the user would type a length, watch a wall silently vanish, and then be told about
+   * it by a panel somewhere else on screen. A preview that only shows the good outcome is not a
+   * preview.
+   *
+   * It does not make the change impossible, and it deliberately does not. A broken document is a
+   * normal, repairable input everywhere else in this editor, refusing would leave no way to say "yes,
+   * I know, that stub is going anyway", and the collapsed wall stays reachable — tapping its issue
+   * selects it, which is how it gets deleted.
+   */
+  collapsing: readonly string[];
+  /**
+   * Other corners the moved one would land within `NODE_MERGE_TOLERANCE_MM` of — the
+   * `NODES_NEARLY_COINCIDENT` case.
+   *
+   * Two corners a few millimetres apart are one corner that failed to merge, and no amount of mitring
+   * repairs it because the walls genuinely do not meet. It is the quietest bug in the whole document:
+   * invisible at any sane zoom in the 2D plan, and a hairline gap in the 3D shell.
+   *
+   * Exact coincidence is NOT reported, matching the validator: two corners at exactly the same point
+   * do meet, so the geometry is redundant rather than wrong.
+   *
+   * WALL_TOO_SHORT is deliberately not previewed alongside these two. Someone typing 90mm into a
+   * length field usually means 90mm, and a warning that fires on a deliberate act is how people are
+   * trained to dismiss warnings without reading them — which would cost us the two above, where the
+   * user really did not mean it.
+   */
+  nearlyCoincident: readonly { node: string; distanceMm: number }[];
 }
 
 export type LengthFailure =
@@ -305,15 +369,48 @@ export function planLengthChange(
   const along = subtract(mover, fixed);
   if (along.x === 0 && along.y === 0) return { ok: false, reason: 'unmeasurable' };
 
+  // The resized wall itself can never come out zero-length, and it is worth knowing why rather than
+  // guarding for it: `to` would have to round onto `fixed`, which needs both components of
+  // `direction * lengthMm` to be under half a millimetre. The longer component of a unit vector is
+  // at least 0.707, so that needs a length below 0.71mm — and lengths at or below zero are already
+  // refused above, while the field only ever produces whole millimetres.
   const direction = normalise(along);
   const to: Point = {
     x: Math.round(fixed.x + direction.x * lengthMm),
     y: Math.round(fixed.y + direction.y * lengthMm),
   };
 
-  const followers = level.walls
-    .filter((w) => w.id !== wall.id && (w.a === mover.id || w.b === mover.id))
-    .map((w) => w.id);
+  const followers: string[] = [];
+  const collapsing: string[] = [];
+  for (const other of level.walls) {
+    if (other.id === wall.id) continue;
+    const farId = other.a === mover.id ? other.b : other.b === mover.id ? other.a : null;
+    if (farId === null) continue;
+    followers.push(other.id);
+
+    // Exact integer comparison, not a distance under some epsilon. Both the far corner's stored
+    // coordinates and `to` are whole millimetres, so "lands on the same point" is a question with a
+    // yes-or-no answer, the same way every comparison in `validate` is.
+    const far = nodeById.get(farId);
+    if (far !== undefined && far.x === to.x && far.y === to.y) collapsing.push(other.id);
+  }
+
+  const nearlyCoincident: { node: string; distanceMm: number }[] = [];
+  const toleranceSq = NODE_MERGE_TOLERANCE_MM * NODE_MERGE_TOLERANCE_MM;
+  for (const other of level.nodes) {
+    // The moving corner is excluded against ITSELF: its stored coordinates are still where it is
+    // now, so a small length change would otherwise have it report itself as its own near neighbour.
+    // The fixed end is NOT excluded — a wall short enough for its own two ends to land within 5mm of
+    // each other is exactly the mistake worth catching.
+    if (other.id === mover.id) continue;
+    const dx = other.x - to.x;
+    const dy = other.y - to.y;
+    const dSq = dx * dx + dy * dy;
+    if (dSq === 0 || dSq >= toleranceSq) continue;
+    // Integers in, integers squared: the decision is exact. The square root is display only, and
+    // rounded, because "3.606mm" helps nobody.
+    nearlyCoincident.push({ node: other.id, distanceMm: Math.round(Math.sqrt(dSq)) });
+  }
 
   return {
     ok: true,
@@ -325,6 +422,8 @@ export function planLengthChange(
       to,
       achievedLengthMm: Math.round(distance(fixed, to)),
       followers,
+      collapsing,
+      nearlyCoincident,
     },
   };
 }

@@ -379,11 +379,14 @@ export const usePlanStore = create<PlanState>()(
       const { split } = outcome;
       mutate((doc) => {
         const target = currentLevel(doc);
-        const wall = target.walls.find((w) => w.id === split.shortenedWall);
+        const wall = target.walls.find((w) => w.id === split.shortened.wall);
         if (wall === undefined) return;
 
         target.nodes.push(castDraft(split.node));
-        wall.b = split.node.id;
+        wall.b = split.shortened.b;
+        // The near half becomes the user's along with everything else the tap created; the rule and
+        // the reasoning live in `lib/geometry/edit.ts`, so the store only applies what it is handed.
+        wall.meta = castDraft(split.shortened.meta);
         target.walls.push(castDraft(split.addedWall));
 
         for (const move of split.movedOpenings) {
