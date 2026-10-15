@@ -109,10 +109,10 @@ table, the parametric furniture kernel, and the screenshot pass.
 
 ---
 
-## Reading order for new contributors
+## Reading order
 
 1. **`CLAUDE.md`** (repo root) — binding rules. Claude Code reads it every session; so should you.
-2. **`docs/ONBOARDING.md`** — the architecture, the conventions that will bite you, the tracks.
+2. **`docs/ONBOARDING.md`** — the architecture, the conventions that will bite you, the remaining subsystems.
 3. **`docs/spec-01`** through **`spec-05`** — how each piece was specified, and why.
 
 Then clone it, run it, and draw a flat by hand. Ten minutes with the thing is worth an hour of
@@ -120,9 +120,8 @@ reading about it.
 
 ## Working agreement
 
-- Branch per track. Never commit to `main` directly.
-- Pull requests, read by someone else before merging.
-- Anything touching `lib/plan/` or `lib/geometry/` needs review — those are the shared foundations
-  and a change there breaks every track silently.
+- Small commits to `main`, each passing the four checks above.
+- Take extra care with `lib/plan/` and `lib/geometry/` — every subsystem depends on them, and a
+  change there breaks the others silently.
 - Write a spec before building. Read what comes back, not the summary of it.
 - One item at a time. The failure mode for a project this size is five subsystems at 30%.

@@ -44,8 +44,8 @@ There is ONE JSON document per project, defined in `lib/plan/schema.ts`. Every v
 the 3D scene, screenshots, what chat knows about the room — is a *rendering* of it. The 3D scene is
 not a separate thing that gets synced.
 
-This is also why three people can work in parallel without colliding: each track talks to the
-document, not to the other tracks.
+This is also what keeps the subsystems independent: each one talks to the document, not to the
+others.
 
 Four rules the schema enforces. Do not work around any of them:
 
@@ -133,11 +133,9 @@ We direct Claude Code rather than typing implementations. That works, but only w
 
 ### Git
 
-- **Branch per track.** Never commit to `main` directly.
-- Pull requests, and someone else reads it before it merges.
-- **Anything touching `lib/plan/` or `lib/geometry/` needs review from K**, because those are the
-  shared foundations every track depends on and a change there breaks everyone silently.
-- Everything else is yours.
+- Small commits to `main`, each meeting the definition of done below.
+- **Take extra care with `lib/plan/` and `lib/geometry/`.** They are the shared foundations every
+  subsystem depends on, and a change there breaks the others silently.
 
 ### Definition of done
 
@@ -145,7 +143,7 @@ We direct Claude Code rather than typing implementations. That works, but only w
 returns `[]`. That last one is the canary — if the sample flat starts producing issues, something
 in the foundations moved.
 
-## The tracks
+## Remaining subsystems
 
 **Renderer.** Camera modes and the Google-Earth swoop (top-down → tap a room → animated dive →
 look around), portal culling from the floorplan graph, lighting v1, and the screenshot accumulator.
